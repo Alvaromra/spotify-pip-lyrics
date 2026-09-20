@@ -1,475 +1,207 @@
-const {
-  app,
-  BrowserWindow,
-  globalShortcut,
-} = require("electron");
+const path = require("node:path");
+const { app, BrowserWindow, globalShortcut, ipcMain } = require("electron");
 
-//
-// GPU / OVERLAY FLAGS
-//
-app.commandLine.appendSwitch(
-  "enable-transparent-visuals"
-);
+// ---------------------------------------------------------------------------
+// Flags de GPU / overlay
+// ---------------------------------------------------------------------------
 
-app.commandLine.appendSwitch(
-  "disable-renderer-backgrounding"
-);
+app.commandLine.appendSwitch("enable-transparent-visuals");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
 
-app.commandLine.appendSwitch(
-  "enable-gpu-rasterization"
-);
+const isDev = !app.isPackaged;
+const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
 
-app.commandLine.appendSwitch(
-  "enable-zero-copy"
-);
+let win = null;
+let topMostTimer = null;
 
-app.commandLine.appendSwitch(
-  "ignore-gpu-blocklist"
-);
+const state = {
+  karaoke: false,
+  clickThrough: false,
+  gamerMode: false,
+};
 
-let win;
-
-// Estado karaoke
-let karaokeEnabled =
-  false;
-
-// Click-through
-let clickThrough =
-  false;
-
-// Gamer mode
-let gamerMode =
-  false;
+// ---------------------------------------------------------------------------
 
 function createWindow() {
+  win = new BrowserWindow({
+    width: 520,
+    height: 720,
+    transparent: true,
+    frame: false,
+    resizable: true,
+    movable: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    roundedCorners: false,
+    thickFrame: false,
+    focusable: true,
+    fullscreenable: false,
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,
+    visualEffectState: "active",
+    webPreferences: {
+      // Sem nodeIntegration: o renderer carrega conteudo servido por HTTP.
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      backgroundThrottling: false,
+      preload: path.join(__dirname, "preload.cjs"),
+    },
+  });
 
-  //
-  // JANELA GAMER
-  //
-  win =
-    new BrowserWindow({
-
-      width: 520,
-
-      height: 720,
-
-      transparent: true,
-
-      frame: false,
-
-      resizable: true,
-
-      movable: true,
-
-      skipTaskbar: true,
-
-      hasShadow: false,
-
-      roundedCorners: false,
-
-      thickFrame: false,
-
-      // IMPORTANTE PRA JOGOS
-      focusable: true,
-
-      fullscreenable: false,
-
-      backgroundColor:
-        "#00000000",
-
-      alwaysOnTop: true,
-
-      visualEffectState:
-        "active",
-
-      webPreferences: {
-
-        nodeIntegration: true,
-
-        contextIsolation: false,
-
-        backgroundThrottling: false,
-      },
-    });
-
-  //
-  // FRONTEND
-  //
-  win.loadURL(
-    "http://localhost:5173"
-  );
-
-  //
-  // OVERLAY MODE
-  //
-  win.setAlwaysOnTop(
-    true,
-    "screen-saver"
-  );
-
-  win.setVisibleOnAllWorkspaces(
-    true,
-    {
-      visibleOnFullScreen: true,
-    }
-  );
-
-  //
-  // OVERLAY GAMER
-  //
-  win.setIgnoreMouseEvents(
-    false
-  );
-
-  win.setAlwaysOnTop(
-    true,
-    "screen-saver",
-    999
-  );
-
-  // força topo
-  win.moveTop();
-
-  //
-  // REGISTRAR HOTKEY
-  //
-  function registerShortcut(
-    shortcut,
-    callback
-  ) {
-
-    const success =
-      globalShortcut.register(
-        shortcut,
-        callback
-      );
-
-    if (!success) {
-
-      console.log(
-        "Falha ao registrar:",
-        shortcut
-      );
-
-    } else {
-
-      console.log(
-        "Hotkey registrada:",
-        shortcut
-      );
-    }
+  if (isDev) {
+    win.loadURL(DEV_URL);
+  } else {
+    win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
 
-  //
-  // HOTKEY KARAOKE
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+K",
-    () => {
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setIgnoreMouseEvents(false);
 
-      karaokeEnabled =
-        !karaokeEnabled;
-
-      win.webContents.send(
-        "toggle-karaoke",
-        karaokeEnabled
-      );
-
-      console.log(
-        "Karaoke:",
-        karaokeEnabled
-      );
-    }
-  );
-
-  //
-  // HOTKEY GAMER MODE
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+G",
-    () => {
-
-      gamerMode =
-        !gamerMode;
-
-      if (gamerMode) {
-
-        // modo gamer
-        win.setOpacity(
-          0.28
-        );
-
-        console.log(
-          "Gamer Mode ON"
-        );
-
-      } else {
-
-        // modo normal
-        win.setOpacity(
-          1
-        );
-
-        console.log(
-          "Gamer Mode OFF"
-        );
-      }
-    }
-  );
-
-  //
-  // HOTKEY RESTORE NORMAL
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+R",
-    () => {
-
-      gamerMode =
-        false;
-
-      clickThrough =
-        false;
-
-      win.setOpacity(
-        1
-      );
-
-      win.setIgnoreMouseEvents(
-        false
-      );
-
-      console.log(
-        "Overlay Restaurado"
-      );
-    }
-  );
-
-  //
-  // HOTKEY CLICK THROUGH
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+X",
-    () => {
-
-      clickThrough =
-        !clickThrough;
-
-      win.setIgnoreMouseEvents(
-        clickThrough,
-        {
-          forward: true,
-        }
-      );
-
-      console.log(
-        "Click Through:",
-        clickThrough
-      );
-    }
-  );
-
-  //
-  // HOTKEY HIDE / SHOW
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+H",
-    () => {
-
-      if (
-        win.isVisible()
-      ) {
-
-        win.hide();
-
-        console.log(
-          "Overlay Hidden"
-        );
-
-      } else {
-
-        win.show();
-
-        win.moveTop();
-
-        console.log(
-          "Overlay Visible"
-        );
-      }
-    }
-  );
-
-  //
-  // HOTKEY DEVTOOLS
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+J",
-    () => {
-
-      win.webContents.toggleDevTools();
-    }
-  );
-
-  //
-  // HOTKEY OPACITY +
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+=",
-    () => {
-
-      let opacity =
-        win.getOpacity();
-
-      opacity =
-        Math.min(
-          opacity + 0.05,
-          1
-        );
-
-      win.setOpacity(
-        opacity
-      );
-
-      console.log(
-        "Opacity:",
-        opacity
-      );
-    }
-  );
-
-  //
-  // HOTKEY OPACITY -
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+-",
-    () => {
-
-      let opacity =
-        win.getOpacity();
-
-      opacity =
-        Math.max(
-          opacity - 0.05,
-          0.10
-        );
-
-      win.setOpacity(
-        opacity
-      );
-
-      console.log(
-        "Opacity:",
-        opacity
-      );
-    }
-  );
-
-  //
-  // HOTKEY MINIMIZE
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+B",
-    () => {
-
-      if (
-        win.isMinimized()
-      ) {
-
-        win.restore();
-
-        win.moveTop();
-
-      } else {
-
-        win.minimize();
-      }
-    }
-  );
-
-  //
-  // HOTKEY FULLSCREEN
-  //
-  registerShortcut(
-    "CommandOrControl+Alt+Enter",
-    () => {
-
-      win.setFullScreen(
-        !win.isFullScreen()
-      );
-
-      setTimeout(() => {
-
-        win.moveTop();
-
-      }, 500);
-    }
-  );
-
-  //
-  // MANTÉM NO TOPO
-  //
-  setInterval(() => {
-
-    if (
-      win &&
-      !win.isDestroyed()
-    ) {
-
-      win.moveTop();
-    }
-
+  // Reforca o topo periodicamente porque alguns jogos em fullscreen roubam a
+  // camada. O timer e limpo no close para nao vazar.
+  topMostTimer = setInterval(() => {
+    if (win && !win.isDestroyed() && win.isVisible()) win.moveTop();
   }, 3000);
 
-  //
-  // FECHAMENTO
-  //
-  win.on(
-    "closed",
-    () => {
-
-      globalShortcut.unregisterAll();
-
-      win = null;
-    }
-  );
+  win.on("closed", () => {
+    clearInterval(topMostTimer);
+    topMostTimer = null;
+    win = null;
+  });
 }
 
-//
-// APP READY
-//
-app.whenReady().then(() => {
+// ---------------------------------------------------------------------------
+// Atalhos globais
+// ---------------------------------------------------------------------------
 
-  createWindow();
+function register(accelerator, handler) {
+  const ok = globalShortcut.register(accelerator, handler);
+  if (!ok) console.warn("Falha ao registrar hotkey:", accelerator);
+}
 
-  app.on(
-    "activate",
-    () => {
+function withWindow(fn) {
+  return () => {
+    if (win && !win.isDestroyed()) fn(win);
+  };
+}
 
-      if (
-        BrowserWindow.getAllWindows()
-          .length === 0
-      ) {
-
-        createWindow();
-      }
-    }
+function registerShortcuts() {
+  register(
+    "CommandOrControl+Alt+K",
+    withWindow((w) => {
+      state.karaoke = !state.karaoke;
+      w.webContents.send("toggle-karaoke", state.karaoke);
+    })
   );
+
+  register(
+    "CommandOrControl+Alt+G",
+    withWindow((w) => {
+      state.gamerMode = !state.gamerMode;
+      w.setOpacity(state.gamerMode ? 0.28 : 1);
+    })
+  );
+
+  register(
+    "CommandOrControl+Alt+R",
+    withWindow((w) => {
+      state.gamerMode = false;
+      state.clickThrough = false;
+      w.setOpacity(1);
+      w.setIgnoreMouseEvents(false);
+    })
+  );
+
+  register(
+    "CommandOrControl+Alt+X",
+    withWindow((w) => {
+      state.clickThrough = !state.clickThrough;
+      w.setIgnoreMouseEvents(state.clickThrough, { forward: true });
+    })
+  );
+
+  register(
+    "CommandOrControl+Alt+H",
+    withWindow((w) => {
+      if (w.isVisible()) {
+        w.hide();
+      } else {
+        w.show();
+        w.moveTop();
+      }
+    })
+  );
+
+  register(
+    "CommandOrControl+Alt+=",
+    withWindow((w) => w.setOpacity(Math.min(w.getOpacity() + 0.05, 1)))
+  );
+
+  register(
+    "CommandOrControl+Alt+-",
+    withWindow((w) => w.setOpacity(Math.max(w.getOpacity() - 0.05, 0.1)))
+  );
+
+  register(
+    "CommandOrControl+Alt+B",
+    withWindow((w) => {
+      if (w.isMinimized()) {
+        w.restore();
+        w.moveTop();
+      } else {
+        w.minimize();
+      }
+    })
+  );
+
+  // DevTools so em desenvolvimento.
+  if (isDev) {
+    register(
+      "CommandOrControl+Alt+J",
+      withWindow((w) => w.webContents.toggleDevTools())
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IPC: mantem main e renderer com o mesmo estado de karaoke
+// ---------------------------------------------------------------------------
+
+ipcMain.on("set-karaoke", (_event, enabled) => {
+  state.karaoke = Boolean(enabled);
 });
 
-//
-// FECHAR APP
-//
-app.on(
-  "window-all-closed",
-  () => {
+// ---------------------------------------------------------------------------
 
-    globalShortcut.unregisterAll();
-
-    if (
-      process.platform !==
-      "darwin"
-    ) {
-
-      app.quit();
+// Uma instancia so: evita dois overlays sobrepostos.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (win && !win.isDestroyed()) {
+      win.show();
+      win.moveTop();
     }
-  }
-);
+  });
+
+  app.whenReady().then(() => {
+    createWindow();
+    registerShortcuts();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});

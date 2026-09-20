@@ -1,16 +1,24 @@
 {
   "name": "spotify-pip-lyrics",
   "version": "1.0.0",
+  "private": true,
   "scripts": {
-    "start": "concurrently \"node server/index.cjs\" \"cd client && npm start\""
+    "server": "node server/index.cjs",
+    "client": "npm --prefix client run start",
+    "start": "concurrently -n server,client -c green,cyan \"npm run server\" \"npm run client\"",
+    "build": "npm --prefix client run build",
+    "dist:win": "npm --prefix client run dist:win",
+    "dist:linux": "npm --prefix client run dist:linux",
+    "dist:mac": "npm --prefix client run dist:mac"
   },
   "dependencies": {
     "axios": "^1.13.1",
-    "concurrently": "^9.2.1",
-    "cors": "^2.8.6",
-    "electron": "^42.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "16.4.5",
     "express": "^5.1.0",
-    "open": "^10.2.0",
     "spotify-web-api-node": "^5.0.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

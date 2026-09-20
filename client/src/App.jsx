@@ -1,871 +1,434 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-
+import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 
+import { parseLrc, findLineIndex } from "./lib/lrc";
 import "./App.css";
 
-// Detecta Electron
-let ipcRenderer = null;
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8888";
+const POLL_MS = 3000; // 1s era desnecessario e queimava rate limit
+const VOICE_THRESHOLD = 28;
 
-const isElectron =
-  typeof window !== "undefined" &&
-  typeof window.require === "function";
+const ACCENTS = [
+  "30,215,96",
+  "255,0,110",
+  "0,200,255",
+  "255,140,0",
+  "180,0,255",
+  "255,60,60",
+];
 
-if (isElectron) {
-
-  try {
-
-    ipcRenderer =
-      window.require(
-        "electron"
-      ).ipcRenderer;
-
-  } catch {
-
-    ipcRenderer = null;
-  }
-}
+const overlay = typeof window !== "undefined" ? window.overlay : null;
+const isElectron = Boolean(overlay?.isElectron);
 
 function App() {
+  const [track, setTrack] = useState(null);
+  const [playing, setPlaying] = useState(false);
+  const [lyrics, setLyrics] = useState([]);
+  const [lyricsState, setLyricsState] = useState("idle"); // idle|loading|ok|none
+  const [currentIndex, setCurrentIndex] = useState(-1);
+  const [accent, setAccent] = useState(ACCENTS[0]);
+  const [authError, setAuthError] = useState(false);
 
-  // Música
-  const [track, setTrack] =
-    useState(null);
+  const [karaoke, setKaraoke] = useState(false);
+  const [voiceLevel, setVoiceLevel] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [score, setScore] = useState(0);
+  const [judgement, setJudgement] = useState("");
 
-  // Lyrics
-  const [lyrics, setLyrics] =
-    useState([]);
+  // Refs de alta frequencia: mudam a 60fps e nao devem disparar render.
+  const clockRef = useRef({ progressMs: 0, syncedAt: 0, playing: false });
+  const lyricsRef = useRef([]);
+  const voiceRef = useRef(0);
+  const sustainRef = useRef(0);
+  const stableRef = useRef(0);
+  const lastHitRef = useRef({ line: -1, at: 0 });
+  const karaokeRef = useRef(false);
+  const trackIdRef = useRef(null);
+  const rafRef = useRef(null);
+  const progressBarRef = useRef(null);
+  const judgementTimerRef = useRef(null);
 
-  // Linha atual
-  const [currentIndex, setCurrentIndex] =
-    useState(0);
-
-  // Cor dinâmica
-  const [accentColor, setAccentColor] =
-    useState("30,215,96");
-
-  // Progress
-  const [progress, setProgress] =
-    useState(0);
-
-  // Sync
-  const [lastSyncTime, setLastSyncTime] =
-    useState(Date.now());
-
-  // Karaoke
-  const [karaokeMode, setKaraokeMode] =
-    useState(false);
-
-  // Mic
-  const [voiceLevel, setVoiceLevel] =
-    useState(0);
-
-  // Score
-  const [combo, setCombo] =
-    useState(0);
-
-  const [score, setScore] =
-    useState(0);
-
-  const [judgement, setJudgement] =
-    useState("");
-
-  const [lastHitLine, setLastHitLine] =
-    useState(-1);
-
-  const [lastHitTime, setLastHitTime] =
-    useState(0);
-
-  // Refs
-  const progressRef = useRef(0);
-
-  const voiceLevelRef = useRef(0);
-
-  const singingTimeRef = useRef(0);
-
-  const stableVoiceRef = useRef(0);
-
-  const animationRef =
-    useRef(null);
-
-  const colors = [
-    "30,215,96",
-    "255,0,110",
-    "0,200,255",
-    "255,140,0",
-    "180,0,255",
-    "255,60,60",
-  ];
-
-  //
-  // TOGGLE GLOBAL
-  //
-  function toggleKaraoke(
-    forcedState = null
-  ) {
-
-    const newState =
-      forcedState !== null
-        ? forcedState
-        : !karaokeMode;
-
-    setKaraokeMode(
-      newState
-    );
-
-    localStorage.setItem(
-      "karaoke-mode",
-      JSON.stringify(newState)
-    );
-
-    if (!newState) {
-
-      setJudgement("");
-
-      setCombo(0);
-    }
-  }
-
-  //
-  // SPOTIFY
-  //
-  async function fetchData() {
-
-    try {
-
-      const current =
-        await axios.get(
-          "http://localhost:8888/current"
-        );
-
-      const data = current.data;
-
-      if (!data || !data.item)
-        return;
-
-      const newTrackId =
-        data.item.id;
-
-      const oldTrackId =
-        track?.id;
-
-      const changed =
-        oldTrackId !== newTrackId;
-
-      // Cor dinâmica
-      const colorIndex =
-        newTrackId.length %
-        colors.length;
-
-      setAccentColor(
-        colors[colorIndex]
-      );
-
-      // Música mudou
-      if (changed) {
-
-        setCombo(0);
-
-        setCurrentIndex(0);
-
-        if (karaokeMode) {
-
-          setJudgement("♪");
-
-          setTimeout(() => {
-            setJudgement("");
-          }, 1200);
-        }
-      }
-
-      // Track
-      setTrack({
-        id: newTrackId,
-
-        title: data.item.name,
-
-        artist:
-          data.item.artists
-            .map((a) => a.name)
-            .join(", "),
-
-        image:
-          data.item.album.images[0]
-            .url,
-
-        duration:
-          data.item.duration_ms,
-      });
-
-      // Sync
-      progressRef.current =
-        data.progress_ms;
-
-      setProgress(
-        data.progress_ms
-      );
-
-      setLastSyncTime(
-        Date.now()
-      );
-
-      // Lyrics
-      const lyricsRes =
-        await axios.get(
-          "http://localhost:8888/lyrics"
-        );
-
-      const rawLyrics =
-        lyricsRes.data.lyrics;
-
-      if (!rawLyrics)
-        return;
-
-      const parsed =
-        rawLyrics
-          .split("\n")
-          .map((line) => {
-
-            const match =
-              line.match(
-                /\[(\d+):(\d+\.\d+)\](.*)/
-              );
-
-            if (!match)
-              return null;
-
-            return {
-
-              time:
-                parseInt(match[1]) *
-                  60 +
-                parseFloat(match[2]),
-
-              text:
-                match[3].trim(),
-            };
-          })
-          .filter(Boolean);
-
-      setLyrics(parsed);
-
-    } catch (err) {
-
-      console.error(err);
-    }
-  }
-
-  //
-  // Atualiza Spotify
-  //
   useEffect(() => {
+    lyricsRef.current = lyrics;
+  }, [lyrics]);
 
-    fetchData();
-
-    const apiInterval =
-      setInterval(
-        fetchData,
-        1000
-      );
-
-    return () =>
-      clearInterval(apiInterval);
-
-  }, [track]);
-
-  //
-  // HOTKEY ELECTRON
-  //
   useEffect(() => {
+    karaokeRef.current = karaoke;
+  }, [karaoke]);
 
-    if (!ipcRenderer)
-      return;
-
-    ipcRenderer.on(
-      "toggle-karaoke",
-      (_, state) => {
-
-        toggleKaraoke(
-          state
-        );
-      }
-    );
-
-    return () => {
-
-      ipcRenderer.removeAllListeners(
-        "toggle-karaoke"
-      );
-
-    };
-
-  }, [karaokeMode]);
-
-  //
-  // WEB/ELECTRON SYNC
-  //
-  useEffect(() => {
-
-    function syncKaraoke() {
-
-      const saved =
-        localStorage.getItem(
-          "karaoke-mode"
-        );
-
-      if (saved === null)
-        return;
-
-      const parsed =
-        JSON.parse(saved);
-
-      setKaraokeMode(
-        parsed
-      );
-    }
-
-    syncKaraoke();
-
-    window.addEventListener(
-      "storage",
-      syncKaraoke
-    );
-
-    return () => {
-
-      window.removeEventListener(
-        "storage",
-        syncKaraoke
-      );
-
-    };
-
+  const flashJudgement = useCallback((text, ms = 700) => {
+    setJudgement(text);
+    clearTimeout(judgementTimerRef.current);
+    judgementTimerRef.current = setTimeout(() => setJudgement(""), ms);
   }, []);
 
-  //
-  // MICROFONE
-  //
-  useEffect(() => {
+  // -------------------------------------------------------------------------
+  // Karaoke on/off
+  // -------------------------------------------------------------------------
 
-    async function setupMic() {
+  const toggleKaraoke = useCallback(
+    (forced = null) => {
+      setKaraoke((prev) => {
+        const next = forced !== null ? forced : !prev;
+
+        if (!next) {
+          setCombo(0);
+          setJudgement("");
+        }
+
+        overlay?.setKaraoke(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!overlay) return;
+    // O preload devolve o unsubscribe, entao nao precisamos de removeAllListeners.
+    return overlay.onKaraokeToggle((enabled) => toggleKaraoke(enabled));
+  }, [toggleKaraoke]);
+
+  // -------------------------------------------------------------------------
+  // Polling do Spotify: efeito com deps vazias, sem recriar o intervalo
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+
+    async function loadLyrics(t) {
+      setLyricsState("loading");
+      setLyrics([]);
+      setCurrentIndex(-1);
 
       try {
+        const { data } = await axios.get(`${API}/api/lyrics`, {
+          params: {
+            trackId: t.id,
+            title: t.title,
+            artist: t.primaryArtist || t.artist,
+            album: t.album,
+            durationMs: t.durationMs,
+          },
+        });
 
-        const stream =
-          await navigator.mediaDevices.getUserMedia({
-            audio: true,
-          });
+        if (cancelled) return;
 
-        const audioContext =
-          new AudioContext();
+        // syncedLyrics pode vir null: cai para a letra sem tempo em vez de
+        // deixar a tela travada em "...".
+        const parsed = parseLrc(data.synced);
 
-        const analyser =
-          audioContext.createAnalyser();
-
-        const microphone =
-          audioContext.createMediaStreamSource(
-            stream
+        if (parsed.length > 0) {
+          setLyrics(parsed);
+          setLyricsState("ok");
+        } else if (data.plain) {
+          setLyrics(
+            data.plain
+              .split("\n")
+              .filter(Boolean)
+              .map((text, i) => ({ time: i * 4, text, unsynced: true }))
           );
+          setLyricsState("unsynced");
+        } else {
+          setLyricsState(data.instrumental ? "instrumental" : "none");
+        }
+      } catch {
+        if (!cancelled) setLyricsState("none");
+      }
+    }
 
-        microphone.connect(analyser);
+    async function poll() {
+      try {
+        const { data } = await axios.get(`${API}/api/now-playing`);
+        if (cancelled) return;
 
-        analyser.fftSize = 256;
+        setAuthError(false);
 
-        const dataArray =
-          new Uint8Array(
-            analyser.frequencyBinCount
-          );
-
-        function updateVoice() {
-
-          analyser.getByteFrequencyData(
-            dataArray
-          );
-
-          let values = 0;
-
-          for (
-            let i = 0;
-            i < dataArray.length;
-            i++
-          ) {
-
-            values += dataArray[i];
-          }
-
-          const average =
-            (values /
-              dataArray.length) *
-            1.4;
-
-          voiceLevelRef.current =
-            average;
-
-          if (average > 28) {
-
-            singingTimeRef.current +=
-              16;
-
-            stableVoiceRef.current +=
-              1;
-
-          } else {
-
-            singingTimeRef.current =
-              0;
-
-            stableVoiceRef.current =
-              0;
-          }
-
-          setVoiceLevel(
-            average
-          );
-
-          requestAnimationFrame(
-            updateVoice
-          );
+        if (!data.track) {
+          setTrack(null);
+          setPlaying(false);
+          trackIdRef.current = null;
+          clockRef.current.playing = false;
+          return;
         }
 
-        updateVoice();
+        // Ancora do relogio local: sabemos o progresso e o instante da leitura.
+        clockRef.current = {
+          progressMs: data.progressMs,
+          syncedAt: Date.now(),
+          playing: data.playing,
+        };
 
+        setPlaying(data.playing);
+        setTrack(data.track);
+
+        if (data.track.id !== trackIdRef.current) {
+          trackIdRef.current = data.track.id;
+
+          const hash = [...data.track.id].reduce((a, c) => a + c.charCodeAt(0), 0);
+          setAccent(ACCENTS[hash % ACCENTS.length]);
+
+          setCombo(0);
+          lastHitRef.current = { line: -1, at: 0 };
+
+          // Busca a letra apenas quando a musica troca, nao a cada poll.
+          loadLyrics(data.track);
+        }
       } catch (err) {
+        if (cancelled) return;
 
-        console.error(err);
+        if (err.response?.status === 401) {
+          setAuthError(true);
+        } else if (err.response?.status === 429) {
+          // Respeita o Retry-After antes do proximo ciclo.
+          const wait = Number(err.response.headers["retry-after"] || 5) * 1000;
+          clearInterval(timer);
+          setTimeout(() => {
+            if (!cancelled) timer = setInterval(poll, POLL_MS);
+          }, wait);
+        }
       }
     }
 
-    setupMic();
-
-  }, []);
-
-  //
-  // SCORE + TIMING SMOOTH
-  //
-  useEffect(() => {
-
-    function updateLyrics() {
-
-      if (!lyrics.length) {
-
-        animationRef.current =
-          requestAnimationFrame(
-            updateLyrics
-          );
-
-        return;
-      }
-
-      const elapsed =
-        Date.now() -
-        lastSyncTime;
-
-      const realProgress =
-        progressRef.current +
-        elapsed;
-
-      const currentTime =
-        realProgress / 1000;
-
-      setProgress(
-        realProgress
-      );
-
-      // Busca linha atual
-      let index = 0;
-
-      for (
-        let i = 0;
-        i < lyrics.length - 1;
-        i++
-      ) {
-
-        const current =
-          lyrics[i];
-
-        const next =
-          lyrics[i + 1];
-
-        if (
-          currentTime >=
-            current.time &&
-          currentTime <
-            next.time
-        ) {
-
-          index = i;
-
-          break;
-        }
-      }
-
-      // Evita rerender
-      setCurrentIndex(prev => {
-
-        if (prev !== index) {
-          return index;
-        }
-
-        return prev;
-      });
-
-      //
-      // SCORE
-      //
-      if (karaokeMode) {
-
-        const currentLine =
-          lyrics[index];
-
-        const nextLine =
-          lyrics[index + 1];
-
-        if (
-          currentLine &&
-          nextLine
-        ) {
-
-          const lineStart =
-            currentLine.time;
-
-          const lineEnd =
-            nextLine.time;
-
-          const timingAccuracy =
-            Math.abs(
-              currentTime -
-                lineStart
-            );
-
-          const singingNow =
-            voiceLevelRef.current >
-            28;
-
-          const sustainedVoice =
-            singingTimeRef.current >
-            500;
-
-          const canScore =
-            Date.now() -
-              lastHitTime >
-            1400;
-
-          // PERFECT
-          if (
-            singingNow &&
-            sustainedVoice &&
-            timingAccuracy <
-              0.6 &&
-            stableVoiceRef.current >
-              5 &&
-            lastHitLine !==
-              index &&
-            canScore
-          ) {
-
-            setCombo(
-              c => c + 1
-            );
-
-            setScore(
-              s => s + 120
-            );
-
-            setJudgement(
-              "PERFECT"
-            );
-
-            setLastHitLine(
-              index
-            );
-
-            setLastHitTime(
-              Date.now()
-            );
-
-            setTimeout(() => {
-              setJudgement("");
-            }, 700);
-          }
-
-          // GOOD
-          else if (
-            singingNow &&
-            sustainedVoice &&
-            timingAccuracy <
-              1.2 &&
-            lastHitLine !==
-              index &&
-            canScore
-          ) {
-
-            setCombo(
-              c => c + 1
-            );
-
-            setScore(
-              s => s + 70
-            );
-
-            setJudgement(
-              "GOOD"
-            );
-
-            setLastHitLine(
-              index
-            );
-
-            setLastHitTime(
-              Date.now()
-            );
-
-            setTimeout(() => {
-              setJudgement("");
-            }, 700);
-          }
-
-          // MISS
-          else if (
-            currentTime >
-              lineEnd &&
-            lastHitLine !==
-              index
-          ) {
-
-            setCombo(0);
-
-            setJudgement(
-              "MISS"
-            );
-
-            setLastHitLine(
-              index
-            );
-
-            setTimeout(() => {
-              setJudgement("");
-            }, 700);
-          }
-        }
-      }
-
-      animationRef.current =
-        requestAnimationFrame(
-          updateLyrics
-        );
-    }
-
-    updateLyrics();
+    poll();
+    timer = setInterval(poll, POLL_MS);
 
     return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
-      cancelAnimationFrame(
-        animationRef.current
-      );
+  // -------------------------------------------------------------------------
+  // Microfone: aberto somente com o karaoke ligado, e liberado ao desligar
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!karaoke) {
+      voiceRef.current = 0;
+      setVoiceLevel(0);
+      return;
+    }
+
+    let stream = null;
+    let audioCtx = null;
+    let raf = null;
+    let cancelled = false;
+
+    async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) return;
+
+        audioCtx = new AudioContext();
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        audioCtx.createMediaStreamSource(stream).connect(analyser);
+
+        const buffer = new Uint8Array(analyser.frequencyBinCount);
+        let lastUiUpdate = 0;
+
+        const tick = () => {
+          analyser.getByteFrequencyData(buffer);
+
+          let sum = 0;
+          for (let i = 0; i < buffer.length; i++) sum += buffer[i];
+          const level = (sum / buffer.length) * 1.4;
+
+          voiceRef.current = level;
+
+          if (level > VOICE_THRESHOLD) {
+            sustainRef.current += 16;
+            stableRef.current += 1;
+          } else {
+            sustainRef.current = 0;
+            stableRef.current = 0;
+          }
+
+          // Atualiza a UI a ~15fps em vez de 60: o numero na tela nao precisa
+          // de mais que isso e cada setState aqui rerenderizava o App inteiro.
+          const now = performance.now();
+          if (now - lastUiUpdate > 66) {
+            lastUiUpdate = now;
+            setVoiceLevel(level);
+          }
+
+          raf = requestAnimationFrame(tick);
+        };
+
+        tick();
+      } catch (err) {
+        console.warn("Microfone indisponivel:", err.message);
+      }
+    }
+
+    start();
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      stream?.getTracks().forEach((t) => t.stop());
+      audioCtx?.close();
+    };
+  }, [karaoke]);
+
+  // -------------------------------------------------------------------------
+  // Loop de sincronia e pontuação
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    const loop = () => {
+      const clock = clockRef.current;
+      const lines = lyricsRef.current;
+
+      // Com a musica pausada o relogio congela. Antes o progresso continuava
+      // avancando localmente e a letra rolava sozinha.
+      const elapsed = clock.playing ? Date.now() - clock.syncedAt : 0;
+      const positionMs = clock.progressMs + elapsed;
+
+      if (progressBarRef.current && track?.durationMs) {
+        const pct = Math.min((positionMs / track.durationMs) * 100, 100);
+        progressBarRef.current.style.width = `${pct}%`;
+      }
+
+      if (lines.length > 0) {
+        const index = findLineIndex(lines, positionMs / 1000);
+        setCurrentIndex((prev) => (prev === index ? prev : index));
+
+        if (karaokeRef.current && clock.playing && index >= 0) {
+          scoreLine(lines, index, positionMs / 1000);
+        }
+      }
+
+      rafRef.current = requestAnimationFrame(loop);
     };
 
-  }, [
-    lyrics,
-    karaokeMode,
-    lastSyncTime,
-    lastHitLine,
-    lastHitTime,
-  ]);
+    function scoreLine(lines, index, seconds) {
+      const line = lines[index];
+      const next = lines[index + 1];
+      if (!line || !next || line.unsynced) return;
 
-  //
-  // Progress
-  //
-  const progressPercent =
-    track
-      ? (progress /
-          track.duration) *
-        100
-      : 0;
+      const offset = Math.abs(seconds - line.time);
+      const singing = voiceRef.current > VOICE_THRESHOLD;
+      const sustained = sustainRef.current > 500;
+      const cooled = Date.now() - lastHitRef.current.at > 1400;
+      const fresh = lastHitRef.current.line !== index;
+
+      if (singing && sustained && fresh && cooled && stableRef.current > 5 && offset < 0.6) {
+        setCombo((c) => c + 1);
+        setScore((s) => s + 120);
+        flashJudgement("PERFECT");
+        lastHitRef.current = { line: index, at: Date.now() };
+      } else if (singing && sustained && fresh && cooled && offset < 1.2) {
+        setCombo((c) => c + 1);
+        setScore((s) => s + 70);
+        flashJudgement("GOOD");
+        lastHitRef.current = { line: index, at: Date.now() };
+      } else if (seconds > next.time && fresh) {
+        setCombo(0);
+        flashJudgement("MISS");
+        lastHitRef.current = { line: index, at: lastHitRef.current.at };
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [track?.durationMs, flashJudgement]);
+
+  useEffect(() => () => clearTimeout(judgementTimerRef.current), []);
+
+  // -------------------------------------------------------------------------
+
+  const lineAt = (offset) => lyrics[currentIndex + offset]?.text ?? "...";
+
+  const statusMessage = {
+    loading: "Buscando letra...",
+    none: "Letra nao encontrada.",
+    instrumental: "Faixa instrumental.",
+  }[lyricsState];
 
   return (
-    <div
-      className="container"
-      style={{
-        "--accent":
-          accentColor,
-      }}
-    >
+    <div className="container" style={{ "--accent": accent }}>
+      <div className="drag-bar">Spotify Karaoke Overlay</div>
 
-      <div className="drag-bar">
-        Spotify Karaoke Overlay
-      </div>
-
-      {/* BOTÃO WEB */}
       {!isElectron && (
-
         <div className="karaoke-button-wrapper">
-
           <button
-            className={
-              karaokeMode
-                ? "karaoke-button active"
-                : "karaoke-button"
-            }
-            onClick={() =>
-              toggleKaraoke()
-            }
+            className={karaoke ? "karaoke-button active" : "karaoke-button"}
+            onClick={() => toggleKaraoke()}
           >
-
-            <span className="karaoke-icon">
-              {karaokeMode
-                ? "🎤"
-                : "🎵"}
-            </span>
-
+            <span className="karaoke-icon">{karaoke ? "🎤" : "🎵"}</span>
             <span className="karaoke-text">
-              {karaokeMode
-                ? "Karaoke ON"
-                : "Enable Karaoke"}
+              {karaoke ? "Karaoke ON" : "Enable Karaoke"}
             </span>
-
-            <span className="karaoke-status">
-              {karaokeMode
-                ? "LIVE"
-                : "READY"}
-            </span>
-
+            <span className="karaoke-status">{karaoke ? "LIVE" : "READY"}</span>
           </button>
+        </div>
+      )}
 
+      {authError && (
+        <div className="karaoke-line">
+          Sessao do Spotify expirada.{" "}
+          <a href={`${API}/login`} target="_blank" rel="noreferrer">
+            Conectar novamente
+          </a>
         </div>
       )}
 
       {track ? (
         <>
+          {track.image && (
+            <img
+              src={track.image}
+              alt={`Capa de ${track.title}`}
+              className="album-art"
+            />
+          )}
 
-          {/* CAPA */}
-          <img
-            src={track.image}
-            className="album-art"
-          />
+          <h1 className="track-name">{track.title}</h1>
+          <h2 className="artist-name">{track.artist}</h2>
 
-          {/* TÍTULO */}
-          <h1 className="track-name">
-            {track.title}
-          </h1>
-
-          {/* ARTISTA */}
-          <h2 className="artist-name">
-            {track.artist}
-          </h2>
-
-          {/* SCORE */}
-          {karaokeMode && (
+          {karaoke && (
             <div className="score-container">
-
-              <div>
-                🎤 Voice{" "}
-                {Math.floor(
-                  voiceLevel
-                )}
-              </div>
-
-              <div>
-                🔥 Combo {combo}
-              </div>
-
-              <div>
-                ⭐ Score {score}
-              </div>
-
+              <div>🎤 Voice {Math.floor(voiceLevel)}</div>
+              <div>🔥 Combo {combo}</div>
+              <div>⭐ Score {score}</div>
             </div>
           )}
 
-          {/* RESULT */}
-          {karaokeMode && (
-            <div className="judgement">
-              {judgement}
-            </div>
-          )}
+          {karaoke && <div className="judgement">{judgement}</div>}
 
-          {/* PROGRESS */}
           <div className="progress-container">
-
-            <div
-              className="progress-bar"
-              style={{
-                width:
-                  `${progressPercent}%`,
-              }}
-            ></div>
-
+            <div ref={progressBarRef} className="progress-bar" />
           </div>
 
-          {/* LYRICS */}
           <div className="lyrics-container">
-
-            <div className="previous-line">
-              {
-                lyrics[
-                  currentIndex - 1
-                ]
-                  ? lyrics[
-                      currentIndex - 1
-                    ].text
-                  : "..."
-              }
-            </div>
-
-            <div
-              className={
-                karaokeMode
-                  ? "karaoke-line karaoke-active"
-                  : "karaoke-line"
-              }
-              style={{
-                transform:
-                  `scale(${
-                    1 +
-                    Math.min(
-                      voiceLevel /
-                        500,
-                      0.08
-                    )
-                  })`,
-              }}
-            >
-              {
-                lyrics[
-                  currentIndex
-                ]
-                  ? lyrics[
-                      currentIndex
-                    ].text
-                  : "..."
-              }
-            </div>
-
-            <div className="next-line">
-              {
-                lyrics[
-                  currentIndex + 1
-                ]
-                  ? lyrics[
-                      currentIndex + 1
-                    ].text
-                  : "..."
-              }
-            </div>
-
+            {statusMessage ? (
+              <div className="karaoke-line">{statusMessage}</div>
+            ) : (
+              <>
+                <div className="previous-line">{lineAt(-1)}</div>
+                <div
+                  className={
+                    karaoke ? "karaoke-line karaoke-active" : "karaoke-line"
+                  }
+                  style={{
+                    transform: `scale(${1 + Math.min(voiceLevel / 500, 0.08)})`,
+                  }}
+                >
+                  {lineAt(0)}
+                </div>
+                <div className="next-line">{lineAt(1)}</div>
+              </>
+            )}
           </div>
 
+          {!playing && <div className="next-line">⏸ Pausado</div>}
         </>
       ) : (
-
-        <div className="karaoke-line">
-          Nenhuma música tocando.
-        </div>
-
+        <div className="karaoke-line">Nenhuma musica tocando.</div>
       )}
-
     </div>
   );
 }

@@ -1,45 +1,60 @@
 {
-  "name": "client",
-
+  "name": "spotify-pip-lyrics-client",
   "private": true,
-
-  "version": "0.0.0",
-
+  "version": "1.0.0",
   "type": "module",
-
   "main": "electron/main.cjs",
-
   "scripts": {
     "dev": "vite",
-
     "build": "vite build",
-
     "preview": "vite preview",
-
+    "lint": "eslint .",
     "electron": "electron .",
-
-    "start": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\""
+    "start": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
-
   "dependencies": {
     "axios": "^1.16.1",
-
-    "concurrently": "^9.2.1",
-
-    "electron": "^36.9.5",
-
-    "electron-store": "^10.1.0",
-
     "react": "^19.1.0",
-
-    "react-dom": "^19.1.0",
-
-    "wait-on": "^8.0.5"
+    "react-dom": "^19.1.0"
   },
-
   "devDependencies": {
     "@vitejs/plugin-react": "^4.5.0",
-
-    "vite": "^6.3.5"
+    "concurrently": "^9.2.1",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^9.0.0",
+    "vite": "^6.3.5",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.alvaromra.spotifypiplyrics",
+    "productName": "Spotify PiP Lyrics",
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "AudioVideo"
+    },
+    "mac": {
+      "target": "dmg"
+    }
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "electron@43.2.0": true
   }
 }
