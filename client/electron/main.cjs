@@ -1,6 +1,10 @@
 const path = require("node:path");
 const { app, BrowserWindow, globalShortcut, ipcMain, shell } = require("electron");
 
+const auth = require("./auth.cjs");
+const spotify = require("./spotify.cjs");
+const lyrics = require("./lyrics.cjs");
+
 // ---------------------------------------------------------------------------
 // Flags de GPU / overlay
 // ---------------------------------------------------------------------------
@@ -182,7 +186,12 @@ ipcMain.on("set-karaoke", (_event, enabled) => {
 });
 
 // Allowlist: o renderer so consegue abrir http(s), e so no host da propria API.
-const EXTERNAL_HOSTS = new Set(["127.0.0.1", "localhost"]);
+const EXTERNAL_HOSTS = new Set([
+  "127.0.0.1",
+  "localhost",
+  "accounts.spotify.com",
+  "open.spotify.com",
+]);
 
 function openExternal(rawUrl) {
   let url;
@@ -200,6 +209,52 @@ function openExternal(rawUrl) {
 }
 
 ipcMain.on("open-external", (_event, url) => openExternal(url));
+
+// ---------------------------------------------------------------------------
+// IPC do Spotify
+// ---------------------------------------------------------------------------
+
+// Erro cru do main nao atravessa o IPC de forma util: vira string. Entao cada
+// handler devolve um envelope com `ok`, e o renderer decide o que mostrar.
+function fail(err) {
+  return { ok: false, status: err.status ?? 500, error: err.message, retryAfter: err.retryAfter };
+}
+
+ipcMain.handle("spotify:status", () => ({
+  ok: true,
+  configured: auth.isConfigured(),
+  authenticated: auth.isAuthenticated(),
+}));
+
+ipcMain.handle("spotify:login", async () => {
+  try {
+    await auth.login();
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+});
+
+ipcMain.handle("spotify:logout", () => {
+  auth.logout();
+  return { ok: true };
+});
+
+ipcMain.handle("spotify:now-playing", async () => {
+  try {
+    return { ok: true, ...(await spotify.nowPlaying()) };
+  } catch (err) {
+    return fail(err);
+  }
+});
+
+ipcMain.handle("spotify:lyrics", async (_event, track) => {
+  try {
+    return { ok: true, ...(await lyrics.lookup(track ?? {})) };
+  } catch (err) {
+    return fail(err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 

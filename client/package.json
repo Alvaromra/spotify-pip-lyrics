@@ -16,7 +16,6 @@
     "dist:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
-    "axios": "^1.16.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
@@ -50,11 +49,11 @@
       "category": "AudioVideo"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "category": "public.app-category.music",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "O modo karaoke usa o microfone para pontuar o seu canto. O audio nao e gravado nem enviado para lugar nenhum."
+      }
     }
-  },
-  "allowScripts": {
-    "esbuild@0.25.12": true,
-    "electron@43.2.0": true
   }
 }

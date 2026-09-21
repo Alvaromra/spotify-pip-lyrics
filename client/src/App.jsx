@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import axios from "axios";
 
 import { parseLrc, findLineIndex } from "./lib/lrc";
 import "./App.css";
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8888";
 const POLL_MS = 3000; // 1s era desnecessario e queimava rate limit
 const VOICE_THRESHOLD = 28;
 
@@ -30,6 +28,8 @@ function App() {
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [accent, setAccent] = useState(ACCENTS[0]);
   const [authError, setAuthError] = useState(false);
+  const [configured, setConfigured] = useState(true);
+  const [connecting, setConnecting] = useState(false);
 
   const [karaoke, setKaraoke] = useState(false);
   const [voiceLevel, setVoiceLevel] = useState(0);
@@ -118,17 +118,21 @@ function App() {
       setCurrentIndex(-1);
 
       try {
-        const { data } = await axios.get(`${API}/api/lyrics`, {
-          params: {
-            trackId: t.id,
-            title: t.title,
-            artist: t.primaryArtist || t.artist,
-            album: t.album,
-            durationMs: t.durationMs,
-          },
+        const data = await overlay.lyrics({
+          trackId: t.id,
+          title: t.title,
+          artist: t.primaryArtist || t.artist,
+          album: t.album,
+          durationMs: t.durationMs,
+          type: t.type,
         });
 
         if (cancelled) return;
+
+        if (!data.ok) {
+          setLyricsState("none");
+          return;
+        }
 
         // syncedLyrics pode vir null: cai para a letra sem tempo em vez de
         // deixar a tela travada em "...".
@@ -156,8 +160,21 @@ function App() {
 
     async function poll() {
       try {
-        const { data } = await axios.get(`${API}/api/now-playing`);
+        const data = await overlay.nowPlaying();
         if (cancelled) return;
+
+        if (!data.ok) {
+          if (data.status === 401) {
+            setAuthError(true);
+          } else if (data.status === 429) {
+            // Respeita o Retry-After antes de voltar ao ritmo normal.
+            clearInterval(timer);
+            setTimeout(() => {
+              if (!cancelled) timer = setInterval(poll, POLL_MS);
+            }, (data.retryAfter ?? 5) * 1000);
+          }
+          return;
+        }
 
         setAuthError(false);
 
@@ -196,20 +213,17 @@ function App() {
           loadLyrics(data.track);
         }
       } catch (err) {
-        if (cancelled) return;
-
-        if (err.response?.status === 401) {
-          setAuthError(true);
-        } else if (err.response?.status === 429) {
-          // Respeita o Retry-After antes do proximo ciclo.
-          const wait = Number(err.response.headers["retry-after"] || 5) * 1000;
-          clearInterval(timer);
-          setTimeout(() => {
-            if (!cancelled) timer = setInterval(poll, POLL_MS);
-          }, wait);
-        }
+        if (!cancelled) console.warn("Falha no poll:", err.message);
       }
     }
+
+    if (!overlay) return undefined;
+
+    overlay.status().then((status) => {
+      if (cancelled) return;
+      setConfigured(status.configured);
+      setAuthError(!status.authenticated);
+    });
 
     poll();
     timer = setInterval(poll, POLL_MS);
@@ -387,21 +401,35 @@ function App() {
         </div>
       )}
 
-      {authError && (
+      {!isElectron && (
+        <div className="karaoke-line">
+          Abra pelo aplicativo: a conexao com o Spotify roda no processo
+          principal do Electron.
+        </div>
+      )}
+
+      {isElectron && !configured && (
+        <div className="karaoke-line">
+          Falta o Client ID. Preencha em client/electron/config.cjs ou exporte
+          SPOTIFY_CLIENT_ID.
+        </div>
+      )}
+
+      {isElectron && configured && authError && (
         <div className="karaoke-line">
           Conta do Spotify desconectada.{" "}
-          <a
-            href={`${API}/login`}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(event) => {
-              if (!overlay) return;
-              event.preventDefault();
-              overlay.openExternal(`${API}/login`);
+          <button
+            className="karaoke-button"
+            disabled={connecting}
+            onClick={async () => {
+              setConnecting(true);
+              const result = await overlay.login();
+              setConnecting(false);
+              if (result.ok) setAuthError(false);
             }}
           >
-            Conectar
-          </a>
+            {connecting ? "Aguardando o navegador..." : "Conectar"}
+          </button>
         </div>
       )}
 

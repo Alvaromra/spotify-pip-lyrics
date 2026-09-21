@@ -22,4 +22,12 @@ contextBridge.exposeInMainWorld("overlay", {
   openExternal(url) {
     ipcRenderer.send("open-external", String(url));
   },
+
+  // A API do Spotify e do lrclib agora vive no main process: o renderer nao
+  // fala com a rede, nao conhece token e nao precisa de servidor HTTP local.
+  login: () => ipcRenderer.invoke("spotify:login"),
+  logout: () => ipcRenderer.invoke("spotify:logout"),
+  status: () => ipcRenderer.invoke("spotify:status"),
+  nowPlaying: () => ipcRenderer.invoke("spotify:now-playing"),
+  lyrics: (track) => ipcRenderer.invoke("spotify:lyrics", track),
 });
