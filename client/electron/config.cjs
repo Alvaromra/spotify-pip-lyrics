@@ -4,7 +4,7 @@
 //
 // Preencha CLIENT_ID com o valor do seu app em
 // https://developer.spotify.com/dashboard
-const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || "";
+const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || "6ef6d7f786a04013b22c2c1796322392";
 
 // Precisa estar cadastrado identico no dashboard do Spotify.
 const REDIRECT_PORT = 8888;

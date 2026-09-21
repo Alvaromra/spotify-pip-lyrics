@@ -270,6 +270,8 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    auth.init();
+
     createWindow();
     registerShortcuts();
 

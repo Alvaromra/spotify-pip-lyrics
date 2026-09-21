@@ -35,15 +35,28 @@ function challengeFor(verifier) {
 
 const session = {
   accessToken: null,
-  refreshToken: tokenStore.load(),
+  refreshToken: null,
   expiresAt: 0,
 };
+
+// O safeStorage so decifra depois do `ready`. Ler o token na carga do modulo,
+// antes disso, devolvia o conteudo cifrado como se fosse texto: o refresh
+// falhava com lixo e a sessao era apagada. Por isso a leitura e preguicosa, e
+// o main chama init() dentro do whenReady.
+let loaded = false;
+
+function init() {
+  if (loaded) return;
+  loaded = true;
+  session.refreshToken = tokenStore.load();
+}
 
 function isConfigured() {
   return Boolean(CLIENT_ID);
 }
 
 function isAuthenticated() {
+  init();
   return Boolean(session.refreshToken);
 }
 
@@ -216,14 +229,22 @@ async function accessToken() {
         return session.accessToken;
       })
       .catch((err) => {
-        // invalid_grant significa refresh revogado. Sem limpar a sessao aqui,
-        // todo poll seguinte tentaria renovar de novo, para sempre.
         console.error("Falha ao renovar token:", err.message);
-        clearSession();
 
-        const wrapped = new Error("sessao expirada");
-        wrapped.status = 401;
-        throw wrapped;
+        // So invalid_grant significa refresh revogado. Rede fora, DNS, timeout
+        // ou 5xx do Spotify sao transitorios: apagar a sessao nesses casos
+        // deslogaria o usuario so por abrir o app sem internet.
+        if (err.code === "invalid_grant") {
+          clearSession();
+
+          const wrapped = new Error("sessao expirada");
+          wrapped.status = 401;
+          throw wrapped;
+        }
+
+        const transient = new Error("falha temporaria ao renovar o token");
+        transient.status = 503;
+        throw transient;
       })
       .finally(() => {
         refreshInFlight = null;
@@ -237,4 +258,4 @@ function logout() {
   clearSession();
 }
 
-module.exports = { login, logout, accessToken, isAuthenticated, isConfigured };
+module.exports = { init, login, logout, accessToken, isAuthenticated, isConfigured };

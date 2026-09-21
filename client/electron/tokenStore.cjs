@@ -32,14 +32,21 @@ function save(refreshToken) {
 }
 
 function load() {
-  try {
-    const buffer = fs.readFileSync(filePath());
+  let buffer;
 
+  try {
+    buffer = fs.readFileSync(filePath());
+  } catch {
+    return null; // primeira execucao, ou logout anterior
+  }
+
+  try {
     return safeStorage.isEncryptionAvailable()
       ? safeStorage.decryptString(buffer)
       : buffer.toString("utf8");
-  } catch {
-    // Arquivo ausente, corrompido ou cifrado por outro usuario do sistema.
+  } catch (err) {
+    // Keychain negado, arquivo corrompido ou cifrado por outro usuario.
+    console.error("Nao foi possivel ler a sessao salva:", err.message);
     return null;
   }
 }
