@@ -730,3 +730,31 @@ body {
     font-size: 18px;
   }
 }
+/* Letra sem marcas de tempo: bloco rolavel, sem destaque de linha atual. */
+.plain-lyrics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.plain-lyrics-badge {
+  align-self: center;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.plain-lyrics pre {
+  margin: 0;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+}

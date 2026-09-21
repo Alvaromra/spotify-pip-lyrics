@@ -24,7 +24,9 @@ function App() {
   const [track, setTrack] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [lyrics, setLyrics] = useState([]);
-  const [lyricsState, setLyricsState] = useState("idle"); // idle|loading|ok|none
+  const [plainLyrics, setPlainLyrics] = useState("");
+  // idle|loading|ok|unsynced|instrumental|none
+  const [lyricsState, setLyricsState] = useState("idle");
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [accent, setAccent] = useState(ACCENTS[0]);
   const [authError, setAuthError] = useState(false);
@@ -66,27 +68,39 @@ function App() {
   // Karaoke on/off
   // -------------------------------------------------------------------------
 
-  const toggleKaraoke = useCallback(
-    (forced = null) => {
-      setKaraoke((prev) => {
-        const next = forced !== null ? forced : !prev;
+  // O updater do useState tem que ser puro: em StrictMode o React 19 chama a
+  // funcao duas vezes, entao o IPC daqui de dentro disparava em dobro. E
+  // quando o toggle vinha do main via hotkey, ecoava de volta para o main.
+  const toggleKaraoke = useCallback((forced = null) => {
+    setKaraoke((prev) => (forced !== null ? forced : !prev));
+  }, []);
 
-        if (!next) {
-          setCombo(0);
-          setJudgement("");
-        }
+  useEffect(() => {
+    if (!karaoke) {
+      setCombo(0);
+      setJudgement("");
+    }
+  }, [karaoke]);
 
-        overlay?.setKaraoke(next);
-        return next;
-      });
-    },
-    []
-  );
+  // Sincroniza o main apenas quando a mudanca nasceu aqui, nunca no eco.
+  const karaokeFromMain = useRef(false);
+
+  useEffect(() => {
+    if (karaokeFromMain.current) {
+      karaokeFromMain.current = false;
+      return;
+    }
+
+    overlay?.setKaraoke(karaoke);
+  }, [karaoke]);
 
   useEffect(() => {
     if (!overlay) return;
     // O preload devolve o unsubscribe, entao nao precisamos de removeAllListeners.
-    return overlay.onKaraokeToggle((enabled) => toggleKaraoke(enabled));
+    return overlay.onKaraokeToggle((enabled) => {
+      karaokeFromMain.current = true;
+      toggleKaraoke(enabled);
+    });
   }, [toggleKaraoke]);
 
   // -------------------------------------------------------------------------
@@ -100,6 +114,7 @@ function App() {
     async function loadLyrics(t) {
       setLyricsState("loading");
       setLyrics([]);
+      setPlainLyrics("");
       setCurrentIndex(-1);
 
       try {
@@ -123,18 +138,19 @@ function App() {
           setLyrics(parsed);
           setLyricsState("ok");
         } else if (data.plain) {
-          setLyrics(
-            data.plain
-              .split("\n")
-              .filter(Boolean)
-              .map((text, i) => ({ time: i * 4, text, unsynced: true }))
-          );
+          // Sem marcas de tempo nao da para sincronizar. O codigo anterior
+          // inventava 4s por linha, entao a letra rolava sozinha sem relacao
+          // com a musica. Melhor mostrar o texto inteiro e avisar.
+          setPlainLyrics(data.plain.trim());
           setLyricsState("unsynced");
         } else {
           setLyricsState(data.instrumental ? "instrumental" : "none");
         }
       } catch {
-        if (!cancelled) setLyricsState("none");
+        if (!cancelled) {
+          setPlainLyrics("");
+          setLyricsState("none");
+        }
       }
     }
 
@@ -163,10 +179,14 @@ function App() {
         setPlaying(data.playing);
         setTrack(data.track);
 
-        if (data.track.id !== trackIdRef.current) {
-          trackIdRef.current = data.track.id;
+        const trackKey = data.track.id ?? `${data.track.artist}::${data.track.title}`;
 
-          const hash = [...data.track.id].reduce((a, c) => a + c.charCodeAt(0), 0);
+        if (trackKey !== trackIdRef.current) {
+          trackIdRef.current = trackKey;
+
+          // Faixa local vem com id null: cai para o titulo.
+          const seed = data.track.id ?? data.track.title ?? "";
+          const hash = [...seed].reduce((a, c) => a + c.charCodeAt(0), 0);
           setAccent(ACCENTS[hash % ACCENTS.length]);
 
           setCombo(0);
@@ -369,9 +389,18 @@ function App() {
 
       {authError && (
         <div className="karaoke-line">
-          Sessao do Spotify expirada.{" "}
-          <a href={`${API}/login`} target="_blank" rel="noreferrer">
-            Conectar novamente
+          Conta do Spotify desconectada.{" "}
+          <a
+            href={`${API}/login`}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              if (!overlay) return;
+              event.preventDefault();
+              overlay.openExternal(`${API}/login`);
+            }}
+          >
+            Conectar
           </a>
         </div>
       )}
@@ -404,7 +433,12 @@ function App() {
           </div>
 
           <div className="lyrics-container">
-            {statusMessage ? (
+            {lyricsState === "unsynced" ? (
+              <div className="plain-lyrics">
+                <span className="plain-lyrics-badge">Letra sem sincronia</span>
+                <pre>{plainLyrics}</pre>
+              </div>
+            ) : statusMessage ? (
               <div className="karaoke-line">{statusMessage}</div>
             ) : (
               <>

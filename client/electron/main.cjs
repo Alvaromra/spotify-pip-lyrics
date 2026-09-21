@@ -1,5 +1,5 @@
 const path = require("node:path");
-const { app, BrowserWindow, globalShortcut, ipcMain } = require("electron");
+const { app, BrowserWindow, globalShortcut, ipcMain, shell } = require("electron");
 
 // ---------------------------------------------------------------------------
 // Flags de GPU / overlay
@@ -56,6 +56,12 @@ function createWindow() {
   } else {
     win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
+
+  // Nada abre janela dentro do app: links vao para o navegador do sistema.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: "deny" };
+  });
 
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -174,6 +180,26 @@ function registerShortcuts() {
 ipcMain.on("set-karaoke", (_event, enabled) => {
   state.karaoke = Boolean(enabled);
 });
+
+// Allowlist: o renderer so consegue abrir http(s), e so no host da propria API.
+const EXTERNAL_HOSTS = new Set(["127.0.0.1", "localhost"]);
+
+function openExternal(rawUrl) {
+  let url;
+
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return;
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  if (!EXTERNAL_HOSTS.has(url.hostname)) return;
+
+  shell.openExternal(url.toString());
+}
+
+ipcMain.on("open-external", (_event, url) => openExternal(url));
 
 // ---------------------------------------------------------------------------
 

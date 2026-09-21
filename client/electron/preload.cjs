@@ -15,4 +15,11 @@ contextBridge.exposeInMainWorld("overlay", {
   setKaraoke(enabled) {
     ipcRenderer.send("set-karaoke", Boolean(enabled));
   },
+
+  // Abre no navegador padrao. Sem isso, target="_blank" cria uma
+  // BrowserWindow nova herdando as webPreferences do overlay: o login do
+  // Spotify apareceria numa janela transparente, sem moldura e always-on-top.
+  openExternal(url) {
+    ipcRenderer.send("open-external", String(url));
+  },
 });

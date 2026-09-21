@@ -40,8 +40,24 @@ const SCOPES = ["user-read-currently-playing", "user-read-playback-state"];
 
 const app = express();
 
-// Apenas o front local pode conversar com este servidor.
-app.use(cors({ origin: CLIENT_ORIGIN }));
+// No app empacotado o renderer carrega via file://, e o Chromium manda
+// `Origin: null`. Sem isso, toda chamada a API morre no build.
+const ALLOW_FILE_ORIGIN = process.env.ALLOW_FILE_ORIGIN === "true";
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Sem header Origin: processo nativo, curl, o proprio main do Electron.
+      if (!origin) return callback(null, true);
+      if (origin === CLIENT_ORIGIN) return callback(null, true);
+      if (origin === "null" && ALLOW_FILE_ORIGIN) return callback(null, true);
+
+      const err = new Error(`Origem nao permitida: ${origin}`);
+      err.status = 403;
+      return callback(err);
+    },
+  })
+);
 
 // ---------------------------------------------------------------------------
 // Estado de autenticação
@@ -56,6 +72,20 @@ const auth = {
 
 function isAuthenticated() {
   return Boolean(auth.refreshToken);
+}
+
+function clearSession() {
+  auth.accessToken = null;
+  auth.refreshToken = null;
+  auth.expiresAt = 0;
+  spotifyApi.resetAccessToken();
+  spotifyApi.resetRefreshToken();
+}
+
+function unauthorized(message = "Spotify nao autenticado") {
+  const err = new Error(message);
+  err.status = 401;
+  return err;
 }
 
 function applyTokens({ access_token, refresh_token, expires_in }) {
@@ -74,11 +104,7 @@ function applyTokens({ access_token, refresh_token, expires_in }) {
 let refreshInFlight = null;
 
 async function ensureFreshToken() {
-  if (!isAuthenticated()) {
-    const err = new Error("Spotify nao autenticado");
-    err.status = 401;
-    throw err;
-  }
+  if (!isAuthenticated()) throw unauthorized();
 
   if (Date.now() < auth.expiresAt - 60_000) return;
 
@@ -89,6 +115,14 @@ async function ensureFreshToken() {
       .then((data) => {
         applyTokens(data.body);
         console.log("Access token renovado.");
+      })
+      .catch((err) => {
+        // invalid_grant = refresh token revogado ou expirado. Sem limpar a
+        // sessao aqui, todo poll seguinte tenta renovar de novo para sempre e
+        // o front nunca recebe 401 para mostrar o link de reconectar.
+        console.error("Falha ao renovar token:", err.message);
+        clearSession();
+        throw unauthorized("Sessao do Spotify expirada. Faca login de novo.");
       })
       .finally(() => {
         refreshInFlight = null;
@@ -153,18 +187,24 @@ function normalizePlayback(body) {
 
   const item = body.item;
 
+  // Episodio de podcast nao tem `artists`, tem `show`. Faixa local pode vir
+  // com `id: null`. Os dois quebravam o normalize e derrubavam todo poll.
+  const artists = Array.isArray(item.artists) ? item.artists : [];
+  const showName = item.show?.name ?? "";
+
   return {
     playing: Boolean(body.is_playing),
     fetchedAt: Date.now(),
     progressMs: body.progress_ms ?? 0,
+    type: item.type ?? "track",
     track: {
-      id: item.id,
-      title: item.name,
-      artist: item.artists.map((a) => a.name).join(", "),
-      primaryArtist: item.artists[0]?.name ?? "",
-      album: item.album?.name ?? "",
-      image: item.album?.images?.[0]?.url ?? null,
-      durationMs: item.duration_ms,
+      id: item.id ?? null,
+      title: item.name ?? "",
+      artist: artists.map((a) => a.name).join(", ") || showName,
+      primaryArtist: artists[0]?.name ?? showName,
+      album: item.album?.name ?? item.show?.name ?? "",
+      image: item.album?.images?.[0]?.url ?? item.images?.[0]?.url ?? null,
+      durationMs: item.duration_ms ?? 0,
     },
   };
 }
@@ -301,6 +341,14 @@ app.get("/api/lyrics", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+
+// Erros do CORS e afins viram JSON, nao stack trace em HTML.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || 500;
+  if (status >= 500) console.error("erro nao tratado:", err.message);
+  res.status(status).json({ error: err.message });
+});
 
 app.listen(PORT, HOST, () => {
   console.log(`Servidor em http://${HOST}:${PORT}`);
