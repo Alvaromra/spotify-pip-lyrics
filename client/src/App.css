@@ -73,12 +73,15 @@ body {
 
   border-radius: 20px;
 
+  /* Recorte duro no raio: o blur e o brilho nao vazam para o canto quadrado. */
+  clip-path: inset(0 round 20px);
+
   border: none !important;
 
   outline: none !important;
 
-  box-shadow:
-    0 14px 44px rgba(0,0,0,0.28);
+  /* Sem box-shadow externo: o card ocupa a janela inteira, entao a sombra nao
+     tem para onde sair e so aparecia nos 4 cantos, parecendo uma moldura. */
 
   gap:
     clamp(4px, 0.8vw, 14px);

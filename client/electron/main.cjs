@@ -14,6 +14,7 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 
+const isMac = process.platform === "darwin";
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
 
@@ -45,6 +46,9 @@ function createWindow() {
     backgroundColor: "#00000000",
     alwaysOnTop: true,
     visualEffectState: "active",
+    // macOS: `panel` e o tipo de janela flutuante que o sistema aceita por
+    // cima de app em tela cheia. Janela comum fica presa no Space dela.
+    ...(isMac ? { type: "panel" } : {}),
     webPreferences: {
       // Sem nodeIntegration: o renderer carrega conteudo servido por HTTP.
       nodeIntegration: false,
@@ -67,8 +71,14 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // skipTransformProcessType: sem isso o Electron converte o processo em app
+  // de fundo e depois de volta em app normal a cada chamada, e a volta desfaz
+  // justamente a visibilidade sobre tela cheia. O app ja roda como accessory.
+  win.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    skipTransformProcessType: isMac,
+  });
+  win.setAlwaysOnTop(true, "screen-saver", 1);
   win.setIgnoreMouseEvents(false);
 
   // Reforca o topo periodicamente porque alguns jogos em fullscreen roubam a
@@ -87,6 +97,14 @@ function createWindow() {
 // ---------------------------------------------------------------------------
 // Atalhos globais
 // ---------------------------------------------------------------------------
+
+// showInactive: aparece por cima sem ativar o app. Com show() o macOS ativa o
+// app e pode puxar voce para outro Space, tirando o video da tela cheia.
+function showOverlay(w) {
+  if (isMac) w.showInactive();
+  else w.show();
+  w.moveTop();
+}
 
 function register(accelerator, handler) {
   const ok = globalShortcut.register(accelerator, handler);
@@ -140,8 +158,7 @@ function registerShortcuts() {
       if (w.isVisible()) {
         w.hide();
       } else {
-        w.show();
-        w.moveTop();
+        showOverlay(w);
       }
     })
   );
@@ -167,6 +184,10 @@ function registerShortcuts() {
       }
     })
   );
+
+  // Em modo accessory nao ha icone no Dock nem barra de menu, entao o Cmd+Q
+  // nem sempre alcanca o app. Este atalho fecha de qualquer lugar.
+  register("CommandOrControl+Alt+Q", () => app.quit());
 
   // DevTools so em desenvolvimento.
   if (isDev) {
@@ -264,12 +285,15 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", () => {
     if (win && !win.isDestroyed()) {
-      win.show();
-      win.moveTop();
+      showOverlay(win);
     }
   });
 
   app.whenReady().then(() => {
+    // Accessory: sem icone no Dock e sem Cmd+Tab. E o que permite ao macOS
+    // manter o overlay sobre apps em tela cheia.
+    if (isMac) app.setActivationPolicy("accessory");
+
     auth.init();
 
     createWindow();
